@@ -3,7 +3,9 @@ import time
 import schedule
 import threading
 import asyncio
-import re  
+import re
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from playwright.async_api import async_playwright
 
 # --- CONFIGURATION ---
@@ -26,7 +28,6 @@ async def _async_check_amul(pincode):
     
     try:
         async with async_playwright() as p:
-            # Running completely invisibly in the background now!
             browser = await p.chromium.launch(headless=True) 
             
             context = await browser.new_context(
@@ -35,13 +36,9 @@ async def _async_check_amul(pincode):
             )
             page = await context.new_page()
             
-            # Step 1: Open the page
             await page.goto(PRODUCT_PAGE, wait_until="domcontentloaded", timeout=45000)
-            
-            # Step 2: Wait for Amul's popup
             await page.wait_for_timeout(3000) 
             
-            # Find the input box
             pincode_input = page.get_by_placeholder(re.compile("pincode", re.IGNORECASE)).first
             
             if await pincode_input.is_visible():
@@ -60,12 +57,10 @@ async def _async_check_amul(pincode):
                     await page.keyboard.press("ArrowDown")
                     await page.keyboard.press("Enter")
                 
-                # Wait 5 seconds for the actual stock page to load
                 await page.wait_for_timeout(5000) 
             else:
                 print(f"[{pincode}] No popup appeared. Checking screen anyway...")
             
-            # Step 3: Now read the screen!
             content = await page.content()
             content_lower = content.lower()
             
@@ -119,7 +114,28 @@ def run_scheduler():
         schedule.run_pending()
         time.sleep(1)
 
+# --- RENDER DUMMY WEB SERVER ---
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Amul Bot is Alive and Running!")
+
+def run_dummy_server():
+    """Tricks Render into thinking this is a healthy website by opening a port."""
+    port = int(os.environ.get("PORT", 10000))
+    server_address = ('0.0.0.0', port)
+    httpd = HTTPServer(server_address, DummyHandler)
+    print(f"Starting dummy web server on port {port} to satisfy Render health checks...")
+    httpd.serve_forever()
+# -------------------------------
+
 if __name__ == "__main__":
     print("Bot is running...")
+    # 1. Start the Render port listener
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+    # 2. Start your background stock checker
     threading.Thread(target=run_scheduler, daemon=True).start()
+    # 3. Start the Telegram bot listener
     bot.infinity_polling()
